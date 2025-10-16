@@ -1,7 +1,7 @@
 # Use an official Python runtime as a parent image
 FROM python:3.13-slim
-ENV WORKDIR=/work
-RUN mkdir /work
+ENV WORKDIR=/data
+RUN mkdir /data
 
 # Set the working directory in the container
 WORKDIR ${WORKDIR}

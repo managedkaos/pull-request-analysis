@@ -1,105 +1,79 @@
-# Release Work Item Analysis
+# Pull Request Analysis Tool
 
-A Python tool for analyzing Jira work items across releases in a given project.
+A Python tool for analyzing Bitbucket pull requests to gain insights into code review processes, development velocity, and team collaboration patterns.
 
-The tool retrieves work items associated with each release in the project, calculates lead times, and generates summary reports.
+The tool retrieves pull request data from Bitbucket Cloud, calculates various metrics, and generates detailed reports in both CSV and Markdown formats.
 
 ## Overview
 
-This tool connects to Jira via API to analyze work items (issues) across different releases/versions in a Jira project. It provides insights into:
+This tool connects to Bitbucket Cloud via API to analyze pull requests in a repository. It provides insights into:
 
-- Work items per release
-- Lead time analysis (creation to resolution)
+- Review time analysis (creation to merge)
+- Code change metrics (lines added/removed)
+- Collaboration patterns (reviewers, comments, commits)
+- Development velocity trends
 
 ## Prerequisites
 
 Before running the tool, you need:
 
 1. **Docker**: Install Docker on your system
-2. **Jira API Access**: Obtain an API token from [Atlassian Account Settings](https://id.atlassian.com/manage-profile/security/api-tokens)
+2. **Bitbucket API Access**: Obtain an API token from [Atlassian Account Settings](https://id.atlassian.com/manage-profile/security/api-tokens)
 3. **Environment Variables**: Set the following environment variables:
-   - `JIRA_URL`: Your Jira instance URL (e.g., `https://yourcompany.atlassian.net`)
-   - `JIRA_EMAIL`: Your Jira account email
-   - `JIRA_API_TOKEN`: Your Jira API token
-   - `JIRA_PROJECT_ID`: The ID of the project being analyzed
+   - `BITBUCKET_USERNAME`: Your Bitbucket username
+   - `BITBUCKET_API_TOKEN`: Your Bitbucket API token/app password
+   - `BITBUCKET_WORKSPACE`: Your Bitbucket workspace name
+   - `BITBUCKET_REPO`: The repository name to analyze
+
+## Installation
+
+1. Clone or download this repository
+2. Install required dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ## Usage
 
 ### Basic Usage
 
 ```bash
-docker run --rm \
-  --env JIRA_API_TOKEN \
-  --env JIRA_EMAIL \
-  --env JIRA_URL \
-  --env JIRA_PROJECT_ID \
-  --mount $(PWD):/data \
-  ghcr.io/managedkaos/release-work-item-analysis:main
+python main.py
 ```
 
-This will analyze only released versions and generate a summary report in the current directory.
-
-**Note**: The `--mount $(PWD):/data` flag mounts your current directory to `/data` inside the container, allowing the CSV report to be saved to your local filesystem.
+This will analyze the last 50 merged pull requests and generate reports in the current directory.
 
 ### Command Line Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--include-unreleased` | Include unreleased versions in analysis | Only released versions |
-| `--verbose` | Show detailed work item information | Summary only |
-| `--csv FILENAME` | Specify CSV output filename | `release_analysis.csv` |
+| `--days N` | Analyze PRs from the last N days | All available PRs |
+| `--limit N` | Analyze the last N PRs | 50 |
+| `--pr-id N` | Analyze a specific PR by ID number | All PRs |
+| `--output FILENAME` | Specify CSV output filename | `pull_request_data.csv` |
+| `--report FILENAME` | Specify Markdown report filename | `pull_request_analysis.md` |
 
 ### Examples
 
 ```bash
-# Analyze only released versions (default)
-docker run --rm \
-  --env JIRA_API_TOKEN \
-  --env JIRA_EMAIL \
-  --env JIRA_URL \
-  --env JIRA_PROJECT_ID \
-  --mount $(PWD):/data \
-  ghcr.io/managedkaos/release-work-item-analysis:main
+# Analyze PRs from the last 30 days
+python main.py --days 30
 
-# Include unreleased versions
-docker run --rm \
-  --env JIRA_API_TOKEN \
-  --env JIRA_EMAIL \
-  --env JIRA_URL \
-  --env JIRA_PROJECT_ID \
-  --mount $(PWD):/data \
-  ghcr.io/managedkaos/release-work-item-analysis:main \
-  --include-unreleased
+# Analyze the last 100 PRs
+python main.py --limit 100
 
-# Show detailed work item information
-docker run --rm \
-  --env JIRA_API_TOKEN \
-  --env JIRA_EMAIL \
-  --env JIRA_URL \
-  --env JIRA_PROJECT_ID \
-  --mount $(PWD):/data \
-  ghcr.io/managedkaos/release-work-item-analysis:main \
-  --verbose
+# Analyze a specific PR
+python main.py --pr-id 123
 
-# Specify custom CSV report filename
-docker run --rm \
-  --env JIRA_API_TOKEN \
-  --env JIRA_EMAIL \
-  --env JIRA_URL \
-  --env JIRA_PROJECT_ID \
-  --mount $(PWD):/data \
-  ghcr.io/managedkaos/release-work-item-analysis:main \
-  --csv my_analysis.csv
+# Custom output files
+python main.py --output my_analysis.csv --report my_report.md
 
-# Combine multiple options
-docker run --rm \
-  --env JIRA_API_TOKEN \
-  --env JIRA_EMAIL \
-  --env JIRA_URL \
-  --env JIRA_PROJECT_ID \
-  --mount $(PWD):/data \
-  ghcr.io/managedkaos/release-work-item-analysis:main \
-  --include-unreleased --verbose --csv detailed_report.csv
+# Combine options: last 20 PRs from the past 7 days
+python main.py --days 7 --limit 20
+
+# Analyze specific PR with custom report name
+python main.py --pr-id 456 --report pr_456_analysis.md
 ```
 
 ## Output
@@ -108,93 +82,153 @@ docker run --rm \
 
 The script provides detailed console output including:
 
-1. **Connection Status**: Confirms successful Jira connection
-2. **Available Releases**: Lists all releases (filtered by options)
-3. **Work Items per Release**: Shows count and details for each release
-4. **Lead Time Analysis**: For each release with resolved items:
-   - Average lead time (creation to resolution)
-   - Minimum and maximum lead times
-   - Number of resolved work items
-5. **Overall Summary**: Total work items and overall average lead time
+1. **Connection Status**: Confirms successful Bitbucket connection
+2. **PR Fetching Progress**: Shows progress while retrieving PR data
+3. **Analysis Progress**: Shows progress while analyzing each PR
+4. **Summary Statistics**: Comprehensive metrics including:
+   - Total PRs analyzed
+   - Review time statistics (average, median, min, max)
+   - Commits per PR statistics
+   - Comments per PR statistics
+   - Reviewers per PR statistics
+   - Code changes statistics (lines added/removed)
 
 ### CSV Report
 
-The script generates a CSV file with the following columns:
+The script generates a CSV file with detailed data for each PR:
 
 | Column | Description |
 |--------|-------------|
-| `release_name` | Name of the release/version |
-| `release_id` | Jira internal ID of the release |
-| `status` | Released or Unreleased |
-| `version_date` | Release date if available, otherwise start date (YYYY-MM-DD format) |
-| `work_items_found` | Total work items in this release |
-| `work_items_resolved` | Number of resolved work items |
-| `average_lead_time_days` | Average lead time in days |
-| `min_lead_time_days` | Minimum lead time in days |
-| `max_lead_time_days` | Maximum lead time in days |
+| `id` | Pull request ID |
+| `title` | Pull request title |
+| `author` | PR author display name |
+| `state` | PR state (MERGED, OPEN, etc.) |
+| `created_on` | Creation timestamp |
+| `updated_on` | Last update timestamp |
+| `review_time_hours` | Time from creation to merge (hours) |
+| `review_time_days` | Time from creation to merge (days) |
+| `reviewer_count` | Number of reviewers |
+| `commits_count` | Number of commits |
+| `comments_count` | Number of comments |
+| `lines_added` | Lines of code added |
+| `lines_removed` | Lines of code removed |
+| `total_lines_changed` | Total lines changed |
+| `source_branch` | Source branch name |
+| `destination_branch` | Destination branch name |
+
+### Markdown Report
+
+The script generates a comprehensive Markdown report with:
+
+- **Summary**: Total PRs analyzed with breakdown by state
+- **Review Time**: Statistical analysis of review times
+- **Commits per PR**: Analysis of commit patterns
+- **Comments per PR**: Analysis of discussion activity
+- **Reviewers per PR**: Analysis of review participation
+- **Code Changes**: Detailed analysis of code modifications
 
 ### Sample Output
 
 ```text
-Connected to Jira successfully
+Connecting to Bitbucket Cloud...
+Fetching merged pull requests...
+Found 25 PR(s) to analyze
+Analyzing PR 1/25: #123 - Fix authentication bug...
+Analyzing PR 2/25: #124 - Add new feature...
 
-=== All Available Releases (Versions) in SHFT Project ===
-- Showing only released versions (use --include-unreleased to see all)
-- ID: 12345, Name: 'v1.2.0', Status: Released
-- ID: 12346, Name: 'v1.1.0', Status: Released
+================================================================================
+PULL REQUEST ANALYSIS SUMMARY
+================================================================================
 
-=== Work Items for Each Release ===
+Total PRs analyzed: 25
 
---- v1.2.0 (ID: 12345)
-Work items found   : 15
-Work items resolved: 12
+Review Time (hours):
+  Average: 18.5 hours (0.77 days)
+  Median:  12.0 hours (0.50 days)
+  Min:     2.0 hours (0.08 days)
+  Max:     72.0 hours (3.00 days)
 
-Lead Time Summary for v1.2.0:
-  Average: 8.5 days
-  Minimum: 2 days
-  Maximum: 18 days
+Commits per PR:
+  Average: 3.2
+  Median:  2
+  Min:     1
+  Max:     15
 
-=== Writing Summary Report to release_analysis.csv ===
-Summary report written successfully to release_analysis.csv
-Total releases analyzed: 2
-Overall summary:
-  Total work items found: 25
-  Total work items resolved: 20
-  Overall average lead time: 7.2 days
+Comments per PR:
+  Average: 4.8
+  Median:  3
+  Min:     0
+  Max:     25
+
+Reviewers per PR:
+  Average: 2.1
+  Median:  2
+  Min:     1
+  Max:     5
+
+Lines Added per PR:
+  Average: 45.2
+  Median:  28
+  Total:   1130
+
+Lines Removed per PR:
+  Average: 12.8
+  Median:  8
+  Total:   320
+
+Total Lines Changed per PR:
+  Average: 58.0
+  Median:  36
+  Total:   1450
+
+Writing results to pull_request_data.csv...
+Analysis complete! Results saved to pull_request_data.csv
+
+Markdown report saved to pull_request_analysis.md
 ```
-
-## Error Handling
-
-The script includes comprehensive error handling:
-
-- **Missing Environment Variables**: The script will exit with clear instructions if required environment variables are not set
-- **Jira Connection Issues**: Detailed error messages for connection failures
-- **Date Parsing Errors**: Warnings for work items with invalid date formats (shown in verbose mode)
-- **CSV Writing Errors**: Graceful handling of file writing issues
 
 ## Troubleshooting
 
 ### Common Issues
 
 1. **"Missing required environment variables"**
-   - Ensure all four environment variables (`JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_ID`) are set in your shell
+   - Ensure all four environment variables are set in your shell
    - Verify the API token is valid and has appropriate permissions
-   - Check that `JIRA_PROJECT_ID` matches the project key in your Jira instance (e.g., "SHFT", "PROJ", etc.)
+   - Check that workspace and repository names are correct
 
-2. **"Failed to connect to Jira"**
-   - Check that `JIRA_URL` is correct and accessible
-   - Verify `JIRA_EMAIL` and `JIRA_API_TOKEN` are correct
-   - Ensure your Jira instance allows API access
+2. **"Failed to connect to Bitbucket"**
+   - Check that your Bitbucket credentials are correct
+   - Verify the workspace and repository names exist
+   - Ensure your API token has read permissions for the repository
 
-3. **"No versions found matching the criteria"**
-   - Check if the project exists and has versions
-   - Try using `--include-unreleased` to see all versions
+3. **"No PRs to analyze"**
+   - Check if the repository has any pull requests
+   - Verify the date range or limit parameters
+   - Try using `--days` with a larger number
 
-4. **Empty CSV report**
-   - Verify the project has work items associated with releases
-   - Check if work items have the correct fix version set
+4. **"Error analyzing PR"**
+   - Some PRs may have missing data or API access issues
+   - The script will continue with other PRs and report errors
+   - Check the console output for specific error details
 
-5. **CSV file not found after running**
-   - Ensure the volume mount `-v $(PWD):/data` is included in your Docker command
-   - Check that you have write permissions in the current directory
-   - The CSV file will be created in the current directory where you run the Docker command
+5. **Empty or missing output files**
+   - Ensure you have write permissions in the current directory
+   - Check that the analysis completed successfully
+   - Verify the custom filenames are valid
+
+## Features
+
+- **Flexible Filtering**: Filter by date range, limit results, or analyze specific PRs
+- **Comprehensive Metrics**: Detailed analysis of review times, code changes, and collaboration
+- **Multiple Output Formats**: Both CSV data and Markdown reports
+- **Robust Error Handling**: Continues processing even when individual PRs fail
+- **Interrupt-Safe**: Gracefully handles user interruptions while preserving partial results
+- **Real-time Progress**: Shows progress during long-running analyses
+
+## Use Cases
+
+- **Team Performance Analysis**: Understand review velocity and collaboration patterns
+- **Process Improvement**: Identify bottlenecks in the code review process
+- **Code Quality Insights**: Analyze code change patterns and review engagement
+- **Historical Analysis**: Track trends over time with date-based filtering
+- **Individual PR Analysis**: Deep dive into specific pull requests
