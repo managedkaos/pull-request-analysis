@@ -2,28 +2,22 @@ import argparse
 import csv
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
+import statistics
 
-from atlassian import Bitbucket
+from atlassian.bitbucket import Cloud
 
-# Obtain an API token from: https://id.atlassian.com/manage-profile/security/api-tokens
+# Environment variables
+BITBUCKET_USERNAME = os.getenv("BITBUCKET_USERNAME")
+BITBUCKET_API_TOKEN = os.getenv("BITBUCKET_API_TOKEN")
+BITBUCKET_WORKSPACE = os.getenv("BITBUCKET_WORKSPACE")
+BITBUCKET_REPO = os.getenv("BITBUCKET_REPO")
 
-BITBUCKET_URL = os.getenv("BITBUCKET_URL", "https://bitbucket.org")
-BITBUCKET_USERNAME = os.getenv("BITBUCKET_USERNAME")  # Your Bitbucket username/email
-BITBUCKET_API_TOKEN = os.getenv("BITBUCKET_API_TOKEN")  # App password or API token
-BITBUCKET_WORKSPACE = os.getenv("BITBUCKET_WORKSPACE")  # Workspace slug (Cloud) or project key (Server)
-BITBUCKET_REPO = os.getenv("BITBUCKET_REPO")  # Repository slug
-
-# Validate that all required environment variables are set
+# Validate environment variables
 missing_vars = []
-if not BITBUCKET_USERNAME:
-    missing_vars.append("BITBUCKET_USERNAME")
-if not BITBUCKET_API_TOKEN:
-    missing_vars.append("BITBUCKET_API_TOKEN")
-if not BITBUCKET_WORKSPACE:
-    missing_vars.append("BITBUCKET_WORKSPACE")
-if not BITBUCKET_REPO:
-    missing_vars.append("BITBUCKET_REPO")
+for var_name in ["BITBUCKET_USERNAME", "BITBUCKET_API_TOKEN", "BITBUCKET_WORKSPACE", "BITBUCKET_REPO"]:
+    if not os.getenv(var_name):
+        missing_vars.append(var_name)
 
 if missing_vars:
     print(f"Error: Missing required environment variables: {', '.join(missing_vars)}")
@@ -32,401 +26,295 @@ if missing_vars:
         print(f"  export {var}=your_value_here")
     exit(1)
 
-# Initialize Bitbucket connection
-try:
-    bitbucket = Bitbucket(
-        url=BITBUCKET_URL,
+def parse_args():
+    parser = argparse.ArgumentParser(description='Analyze Bitbucket Pull Requests')
+    parser.add_argument('--days', type=int, help='Analyze PRs from the last N days')
+    parser.add_argument('--limit', type=int, default=50, help='Analyze the last N merged PRs (default: 50)')
+    parser.add_argument('--pr-id', type=int, help='Analyze a specific PR by ID number')
+    parser.add_argument('--output', type=str, default='pull_request_data.csv', help='Output CSV file name')
+    parser.add_argument('--report', type=str, default='pull_request_analysis.md', help='Output markdown report file name')
+    return parser.parse_args()
+
+def get_pr_metrics(cloud, workspace, repo, pr):
+    """Get detailed metrics for a single PR"""
+    pr_id = pr['id']
+    
+    # Calculate review time
+    created = datetime.fromisoformat(pr['created_on'].replace('Z', '+00:00'))
+    if pr['state'] == 'MERGED' and pr.get('updated_on'):
+        merged = datetime.fromisoformat(pr['updated_on'].replace('Z', '+00:00'))
+        review_time_hours = (merged - created).total_seconds() / 3600
+        review_time_days = review_time_hours / 24
+    else:
+        review_time_hours = None
+        review_time_days = None
+    
+    # Get reviewers count
+    participants_url = f"repositories/{workspace}/{repo}/pullrequests/{pr_id}"
+    pr_detail = cloud.get(participants_url)
+    
+    reviewers = []
+    if 'participants' in pr_detail:
+        reviewers = [p for p in pr_detail['participants'] if p.get('role') == 'REVIEWER']
+    reviewer_count = len(reviewers)
+    
+    # Get commits count
+    commits_url = f"repositories/{workspace}/{repo}/pullrequests/{pr_id}/commits"
+    commits = list(cloud._get_paged(commits_url))
+    commits_count = len(commits)
+    
+    # Get comments count
+    comments_url = f"repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments"
+    comments = list(cloud._get_paged(comments_url))
+    comments_count = len(comments)
+    
+    # Get code changes (lines added/removed)
+    diffstat_url = f"repositories/{workspace}/{repo}/pullrequests/{pr_id}/diffstat"
+    try:
+        diffstats = list(cloud._get_paged(diffstat_url))
+        lines_added = sum(d.get('lines_added', 0) for d in diffstats)
+        lines_removed = sum(d.get('lines_removed', 0) for d in diffstats)
+    except:
+        lines_added = 0
+        lines_removed = 0
+    
+    return {
+        'id': pr_id,
+        'title': pr['title'],
+        'author': pr['author']['display_name'],
+        'state': pr['state'],
+        'created_on': pr['created_on'],
+        'updated_on': pr.get('updated_on', ''),
+        'review_time_hours': review_time_hours,
+        'review_time_days': review_time_days,
+        'reviewer_count': reviewer_count,
+        'commits_count': commits_count,
+        'comments_count': comments_count,
+        'lines_added': lines_added,
+        'lines_removed': lines_removed,
+        'total_lines_changed': lines_added + lines_removed,
+        'source_branch': pr['source']['branch']['name'],
+        'destination_branch': pr['destination']['branch']['name']
+    }
+
+def print_summary_stats(metrics_list, output_file='pull_request_analysis.md'):
+    """Print summary statistics to console and markdown file"""
+    if not metrics_list:
+        print("No PRs to analyze")
+        return
+    
+    # Prepare output lines
+    output_lines = []
+    
+    def add_line(line=""):
+        print(line)
+        output_lines.append(line)
+    
+    add_line("\n" + "="*80)
+    add_line("PULL REQUEST ANALYSIS SUMMARY")
+    add_line("="*80)
+    
+    add_line(f"\nTotal PRs analyzed: {len(metrics_list)}")
+    
+    # Review time statistics
+    review_times = [m['review_time_hours'] for m in metrics_list if m['review_time_hours'] is not None]
+    if review_times:
+        add_line(f"\nReview Time (hours):")
+        add_line(f"  Average: {statistics.mean(review_times):.2f} hours ({statistics.mean(review_times)/24:.2f} days)")
+        add_line(f"  Median:  {statistics.median(review_times):.2f} hours ({statistics.median(review_times)/24:.2f} days)")
+        add_line(f"  Min:     {min(review_times):.2f} hours ({min(review_times)/24:.2f} days)")
+        add_line(f"  Max:     {max(review_times):.2f} hours ({max(review_times)/24:.2f} days)")
+    
+    # Commits statistics
+    commits = [m['commits_count'] for m in metrics_list]
+    add_line(f"\nCommits per PR:")
+    add_line(f"  Average: {statistics.mean(commits):.2f}")
+    add_line(f"  Median:  {statistics.median(commits):.0f}")
+    add_line(f"  Min:     {min(commits)}")
+    add_line(f"  Max:     {max(commits)}")
+    
+    # Comments statistics
+    comments = [m['comments_count'] for m in metrics_list]
+    add_line(f"\nComments per PR:")
+    add_line(f"  Average: {statistics.mean(comments):.2f}")
+    add_line(f"  Median:  {statistics.median(comments):.0f}")
+    add_line(f"  Min:     {min(comments)}")
+    add_line(f"  Max:     {max(comments)}")
+    
+    # Reviewers statistics
+    reviewers = [m['reviewer_count'] for m in metrics_list]
+    add_line(f"\nReviewers per PR:")
+    add_line(f"  Average: {statistics.mean(reviewers):.2f}")
+    add_line(f"  Median:  {statistics.median(reviewers):.0f}")
+    add_line(f"  Min:     {min(reviewers)}")
+    add_line(f"  Max:     {max(reviewers)}")
+    
+    # Code changes statistics
+    lines_added = [m['lines_added'] for m in metrics_list]
+    lines_removed = [m['lines_removed'] for m in metrics_list]
+    total_lines = [m['total_lines_changed'] for m in metrics_list]
+    
+    add_line(f"\nLines Added per PR:")
+    add_line(f"  Average: {statistics.mean(lines_added):.2f}")
+    add_line(f"  Median:  {statistics.median(lines_added):.0f}")
+    add_line(f"  Total:   {sum(lines_added)}")
+    
+    add_line(f"\nLines Removed per PR:")
+    add_line(f"  Average: {statistics.mean(lines_removed):.2f}")
+    add_line(f"  Median:  {statistics.median(lines_removed):.0f}")
+    add_line(f"  Total:   {sum(lines_removed)}")
+    
+    add_line(f"\nTotal Lines Changed per PR:")
+    add_line(f"  Average: {statistics.mean(total_lines):.2f}")
+    add_line(f"  Median:  {statistics.median(total_lines):.0f}")
+    add_line(f"  Total:   {sum(total_lines)}")
+    
+    add_line("\n" + "="*80)
+    
+    # Write markdown file
+    with open(output_file, 'w') as f:
+        f.write(f"# Pull Request Analysis Report\n\n")
+        f.write(f"*Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n")
+        f.write(f"## Summary\n\n")
+        f.write(f"**Total PRs analyzed:** {len(metrics_list)}\n\n")
+        
+        if review_times:
+            f.write(f"## Review Time\n\n")
+            f.write(f"| Metric | Hours | Days |\n")
+            f.write(f"|--------|-------|------|\n")
+            f.write(f"| Average | {statistics.mean(review_times):.2f} | {statistics.mean(review_times)/24:.2f} |\n")
+            f.write(f"| Median | {statistics.median(review_times):.2f} | {statistics.median(review_times)/24:.2f} |\n")
+            f.write(f"| Min | {min(review_times):.2f} | {min(review_times)/24:.2f} |\n")
+            f.write(f"| Max | {max(review_times):.2f} | {max(review_times)/24:.2f} |\n\n")
+        
+        f.write(f"## Commits per PR\n\n")
+        f.write(f"| Metric | Value |\n")
+        f.write(f"|--------|-------|\n")
+        f.write(f"| Average | {statistics.mean(commits):.2f} |\n")
+        f.write(f"| Median | {statistics.median(commits):.0f} |\n")
+        f.write(f"| Min | {min(commits)} |\n")
+        f.write(f"| Max | {max(commits)} |\n\n")
+        
+        f.write(f"## Comments per PR\n\n")
+        f.write(f"| Metric | Value |\n")
+        f.write(f"|--------|-------|\n")
+        f.write(f"| Average | {statistics.mean(comments):.2f} |\n")
+        f.write(f"| Median | {statistics.median(comments):.0f} |\n")
+        f.write(f"| Min | {min(comments)} |\n")
+        f.write(f"| Max | {max(comments)} |\n\n")
+        
+        f.write(f"## Reviewers per PR\n\n")
+        f.write(f"| Metric | Value |\n")
+        f.write(f"|--------|-------|\n")
+        f.write(f"| Average | {statistics.mean(reviewers):.2f} |\n")
+        f.write(f"| Median | {statistics.median(reviewers):.0f} |\n")
+        f.write(f"| Min | {min(reviewers)} |\n")
+        f.write(f"| Max | {max(reviewers)} |\n\n")
+        
+        f.write(f"## Code Changes\n\n")
+        f.write(f"### Lines Added per PR\n\n")
+        f.write(f"| Metric | Value |\n")
+        f.write(f"|--------|-------|\n")
+        f.write(f"| Average | {statistics.mean(lines_added):.2f} |\n")
+        f.write(f"| Median | {statistics.median(lines_added):.0f} |\n")
+        f.write(f"| Total | {sum(lines_added):,} |\n\n")
+        
+        f.write(f"### Lines Removed per PR\n\n")
+        f.write(f"| Metric | Value |\n")
+        f.write(f"|--------|-------|\n")
+        f.write(f"| Average | {statistics.mean(lines_removed):.2f} |\n")
+        f.write(f"| Median | {statistics.median(lines_removed):.0f} |\n")
+        f.write(f"| Total | {sum(lines_removed):,} |\n\n")
+        
+        f.write(f"### Total Lines Changed per PR\n\n")
+        f.write(f"| Metric | Value |\n")
+        f.write(f"|--------|-------|\n")
+        f.write(f"| Average | {statistics.mean(total_lines):.2f} |\n")
+        f.write(f"| Median | {statistics.median(total_lines):.0f} |\n")
+        f.write(f"| Total | {sum(total_lines):,} |\n\n")
+    
+    print(f"\nMarkdown report saved to {output_file}")
+
+def main():
+    args = parse_args()
+    
+    # Initialize Bitbucket Cloud connection
+    print(f"Connecting to Bitbucket Cloud...")
+    cloud = Cloud(
         username=BITBUCKET_USERNAME,
         password=BITBUCKET_API_TOKEN,
-        cloud=True  # Set to False if using Bitbucket Server/Data Center
+        cloud=True
     )
-    print("Connected to Bitbucket successfully")
-except Exception as e:
-    print(f"Failed to connect to Bitbucket: {e}")
-    print("Please check your environment variables")
-    exit(1)
-
-
-def get_pr_size(workspace, repo_slug, pr_id):
-    """
-    Calculate the size of a pull request based on lines added and removed.
-
-    Returns a dict with additions, deletions, and total changes.
-    """
-    try:
-        # Get the PR details first to access the diffstat URL
-        pr_details = bitbucket.get_pull_request(workspace, repo_slug, pr_id)
-        diffstat_url = pr_details.get('links', {}).get('diffstat', {}).get('href')
-
-        if not diffstat_url:
-            print(f"No diffstat URL found for PR #{pr_id}")
-            return None
-
-        # Make a direct API call to get diffstat
-        import requests
-        response = requests.get(diffstat_url, auth=(BITBUCKET_USERNAME, BITBUCKET_API_TOKEN))
-
-        if response.status_code != 200:
-            print(f"Failed to get diffstat for PR #{pr_id}: {response.status_code}")
-            return None
-
-        diff_stat = response.json()
-
-        total_additions = 0
-        total_deletions = 0
-        files_changed = 0
-
-        for file_stat in diff_stat.get('values', []):
-            total_additions += file_stat.get('lines_added', 0)
-            total_deletions += file_stat.get('lines_removed', 0)
-            files_changed += 1
-
-        return {
-            'additions': total_additions,
-            'deletions': total_deletions,
-            'total_changes': total_additions + total_deletions,
-            'files_changed': files_changed
-        }
-    except Exception as e:
-        print(f"Error getting size for PR #{pr_id}: {e}")
-        return None
-
-
-def get_pr_commits(workspace, repo_slug, pr_id):
-    """Get the number of commits in a pull request."""
-    try:
-        commits = bitbucket.get_pull_requests_commits(workspace, repo_slug, pr_id)
-        return len(commits.get('values', []))
-    except Exception as e:
-        print(f"Error getting commits for PR #{pr_id}: {e}")
-        return 0
-
-
-def get_pr_comments(workspace, repo_slug, pr_id):
-    """Get the number of comments on a pull request."""
-    try:
-        # Get the PR details first to access the comments URL
-        pr_details = bitbucket.get_pull_request(workspace, repo_slug, pr_id)
-        comments_url = pr_details.get('links', {}).get('comments', {}).get('href')
-
-        if not comments_url:
-            return 0
-
-        # Make a direct API call to get comments
-        import requests
-        response = requests.get(comments_url, auth=(BITBUCKET_USERNAME, BITBUCKET_API_TOKEN))
-
-        if response.status_code != 200:
-            return 0
-
-        comments = response.json()
-        return len(comments.get('values', []))
-    except Exception as e:
-        print(f"Error getting comments for PR #{pr_id}: {e}")
-        return 0
-
-
-def get_pr_reviewers(workspace, repo_slug, pr_id):
-    """Get the number of reviewers for a pull request."""
-    try:
-        pr_details = bitbucket.get_pull_request(workspace, repo_slug, pr_id)
-        participants = pr_details.get('participants', [])
-
-        # Count participants who were reviewers (not just the author)
-        reviewers = [p for p in participants if p.get('role') == 'REVIEWER']
-        return len(reviewers)
-    except Exception as e:
-        print(f"Error getting reviewers for PR #{pr_id}: {e}")
-        return 0
-
-
-def calculate_review_time(pr):
-    """
-    Calculate review time in hours from creation to merge/close.
-
-    Returns None if PR is still open or doesn't have required dates.
-    """
-    try:
-        created = datetime.fromisoformat(pr['created_on'].replace('Z', '+00:00'))
-
-        # Check for updated_on (when PR was merged/closed)
-        if 'updated_on' in pr:
-            updated = datetime.fromisoformat(pr['updated_on'].replace('Z', '+00:00'))
-            review_time_hours = (updated - created).total_seconds() / 3600
-            return round(review_time_hours, 2)
-
-        return None
-    except Exception as e:
-        print(f"Error calculating review time: {e}")
-        return None
-
-
-def analyze_pull_requests(workspace, repo_slug, state='MERGED', limit=100):
-    """
-    Analyze pull requests in a repository.
-
-    Args:
-        workspace: Bitbucket workspace slug
-        repo_slug: Repository slug
-        state: PR state filter (MERGED, OPEN, DECLINED, SUPERSEDED)
-        limit: Maximum number of PRs to analyze
-    """
-    pr_data = []
-
-    try:
-        # Get pull requests (returns a generator)
-        prs = bitbucket.get_pull_requests(workspace, repo_slug, state=state)
-
-        count = 0
-        for pr in prs:
-            if count >= limit:
-                break
-
-            pr_id = pr['id']
-            title = pr['title']
-            author = pr['author']['display_name']
-            created_date = pr['created_on']
-
-            print(f"Analyzing PR #{pr_id}: {title}")
-
-            # Get PR size
-            size_info = get_pr_size(workspace, repo_slug, pr_id)
-
-            # Get additional metrics
-            num_commits = get_pr_commits(workspace, repo_slug, pr_id)
-            num_comments = get_pr_comments(workspace, repo_slug, pr_id)
-            num_reviewers = get_pr_reviewers(workspace, repo_slug, pr_id)
-            review_time = calculate_review_time(pr)
-
-            if size_info:
-                pr_data.append({
-                    'id': pr_id,
-                    'title': title,
-                    'author': author,
-                    'created_date': created_date,
-                    'additions': size_info['additions'],
-                    'deletions': size_info['deletions'],
-                    'total_changes': size_info['total_changes'],
-                    'files_changed': size_info['files_changed'],
-                    'num_commits': num_commits,
-                    'num_comments': num_comments,
-                    'num_reviewers': num_reviewers,
-                    'review_time_hours': review_time
-                })
-
-            count += 1
-
-        return pr_data
-
-    except Exception as e:
-        print(f"Error analyzing pull requests: {e}")
-        return []
-
-
-def categorize_pr_size(total_changes):
-    """Categorize PR size based on total line changes."""
-    if total_changes < 10:
-        return 'XS'
-    elif total_changes < 50:
-        return 'S'
-    elif total_changes < 200:
-        return 'M'
-    elif total_changes < 500:
-        return 'L'
+    
+    # Handle specific PR ID
+    if args.pr_id:
+        print(f"Fetching PR #{args.pr_id}...")
+        url = f"repositories/{BITBUCKET_WORKSPACE}/{BITBUCKET_REPO}/pullrequests/{args.pr_id}"
+        try:
+            pr = cloud.get(url)
+            filtered_prs = [pr]
+            print(f"Found PR #{pr['id']}: {pr['title']}")
+        except Exception as e:
+            print(f"Error fetching PR #{args.pr_id}: {e}")
+            return
     else:
-        return 'XL'
-
-
-def export_to_csv(pr_data, filename='pr_analysis.csv'):
-    """Export PR data to CSV file."""
-    if not pr_data:
-        print("No data to export")
-        return
-
-    with open(filename, 'w', newline='') as csvfile:
-        fieldnames = ['id', 'title', 'author', 'created_date', 'additions',
-                      'deletions', 'total_changes', 'files_changed', 'size_category',
-                      'num_commits', 'num_comments', 'num_reviewers', 'review_time_hours']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-        writer.writeheader()
-        for pr in pr_data:
-            pr['size_category'] = categorize_pr_size(pr['total_changes'])
-            writer.writerow(pr)
-
-    print(f"\nData exported to {filename}")
-
-
-def print_summary(pr_data, markdown_file='pr_size_analysis.md'):
-    """Print summary statistics of PR sizes and write to markdown file."""
-    if not pr_data:
-        print("No data to summarize")
-        return
-
-    size_categories = defaultdict(int)
-    total_changes_list = []
-    review_times = []
-    commits_list = []
-    comments_list = []
-    reviewers_list = []
-
-    for pr in pr_data:
-        total_changes = pr['total_changes']
-        total_changes_list.append(total_changes)
-        size_categories[categorize_pr_size(total_changes)] += 1
-
-        if pr.get('review_time_hours') is not None:
-            review_times.append(pr['review_time_hours'])
-        if pr.get('num_commits'):
-            commits_list.append(pr['num_commits'])
-        if pr.get('num_comments') is not None:
-            comments_list.append(pr['num_comments'])
-        if pr.get('num_reviewers') is not None:
-            reviewers_list.append(pr['num_reviewers'])
-
-    # Build summary content
-    summary_lines = []
-    summary_lines.append(f"# Pull Request Size Analysis")
-    summary_lines.append(f"\n**Repository:** {BITBUCKET_WORKSPACE}/{BITBUCKET_REPO}")
-    summary_lines.append(f"**Analysis Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    summary_lines.append(f"**Total PRs Analyzed:** {len(pr_data)}\n")
-
-    summary_lines.append("## PR Size Distribution\n")
-    summary_lines.append("| Size | Count | Percentage |")
-    summary_lines.append("|------|-------|------------|")
-    for size in ['XS', 'S', 'M', 'L', 'XL']:
-        count = size_categories[size]
-        percentage = (count / len(pr_data)) * 100 if pr_data else 0
-        summary_lines.append(f"| {size} | {count} | {percentage:.1f}% |")
-
-    if total_changes_list:
-        avg_changes = sum(total_changes_list) / len(total_changes_list)
-        summary_lines.append("\n## Code Changes\n")
-        summary_lines.append("| Metric | Value |")
-        summary_lines.append("|--------|-------|")
-        summary_lines.append(f"| Average changes per PR | {avg_changes:.1f} lines |")
-        summary_lines.append(f"| Median changes per PR | {sorted(total_changes_list)[len(total_changes_list)//2]} lines |")
-        summary_lines.append(f"| Largest PR | {max(total_changes_list)} lines |")
-        summary_lines.append(f"| Smallest PR | {min(total_changes_list)} lines |")
-
-    if review_times:
-        avg_review_time = sum(review_times) / len(review_times)
-        median_review_time = sorted(review_times)[len(review_times)//2]
-        summary_lines.append("\n## Review Time\n")
-        summary_lines.append("| Metric | Hours | Days |")
-        summary_lines.append("|--------|-------|------|")
-        summary_lines.append(f"| Average | {avg_review_time:.1f} | {avg_review_time/24:.1f} |")
-        summary_lines.append(f"| Median | {median_review_time:.1f} | {median_review_time/24:.1f} |")
-        summary_lines.append(f"| Longest | {max(review_times):.1f} | {max(review_times)/24:.1f} |")
-        summary_lines.append(f"| Shortest | {min(review_times):.1f} | {min(review_times)/24:.1f} |")
-
-    if commits_list:
-        avg_commits = sum(commits_list) / len(commits_list)
-        summary_lines.append("\n## Commits\n")
-        summary_lines.append("| Metric | Value |")
-        summary_lines.append("|--------|-------|")
-        summary_lines.append(f"| Average commits per PR | {avg_commits:.1f} |")
-        summary_lines.append(f"| Median commits per PR | {sorted(commits_list)[len(commits_list)//2]} |")
-        summary_lines.append(f"| Most commits in a PR | {max(commits_list)} |")
-
-    if comments_list:
-        avg_comments = sum(comments_list) / len(comments_list)
-        summary_lines.append("\n## Comments\n")
-        summary_lines.append("| Metric | Value |")
-        summary_lines.append("|--------|-------|")
-        summary_lines.append(f"| Average comments per PR | {avg_comments:.1f} |")
-        summary_lines.append(f"| Median comments per PR | {sorted(comments_list)[len(comments_list)//2]} |")
-        summary_lines.append(f"| Most comments on a PR | {max(comments_list)} |")
-
-    if reviewers_list:
-        avg_reviewers = sum(reviewers_list) / len(reviewers_list)
-        summary_lines.append("\n## Reviewers\n")
-        summary_lines.append("| Metric | Value |")
-        summary_lines.append("|--------|-------|")
-        summary_lines.append(f"| Average reviewers per PR | {avg_reviewers:.1f} |")
-        summary_lines.append(f"| Median reviewers per PR | {sorted(reviewers_list)[len(reviewers_list)//2]} |")
-        summary_lines.append(f"| Most reviewers on a PR | {max(reviewers_list)} |")
-
-    # Write to markdown file
-    markdown_content = '\n'.join(summary_lines)
-    with open(markdown_file, 'w') as f:
-        f.write(markdown_content)
-
-    # Print to console (simplified version)
-    print("\n" + "="*50)
-    print(f"Analysis Summary ({len(pr_data)} PRs)")
-    print("="*50)
-
-    print("\nPR Size Distribution:")
-    for size in ['XS', 'S', 'M', 'L', 'XL']:
-        count = size_categories[size]
-        percentage = (count / len(pr_data)) * 100 if pr_data else 0
-        print(f"  {size}: {count} ({percentage:.1f}%)")
-
-    if total_changes_list:
-        avg_changes = sum(total_changes_list) / len(total_changes_list)
-        print(f"\nCode Changes:")
-        print(f"  Average changes per PR: {avg_changes:.1f} lines")
-        print(f"  Median changes per PR: {sorted(total_changes_list)[len(total_changes_list)//2]} lines")
-        print(f"  Largest PR: {max(total_changes_list)} lines")
-        print(f"  Smallest PR: {min(total_changes_list)} lines")
-
-    if review_times:
-        avg_review_time = sum(review_times) / len(review_times)
-        median_review_time = sorted(review_times)[len(review_times)//2]
-        print(f"\nReview Time:")
-        print(f"  Average: {avg_review_time:.1f} hours ({avg_review_time/24:.1f} days)")
-        print(f"  Median: {median_review_time:.1f} hours ({median_review_time/24:.1f} days)")
-        print(f"  Longest: {max(review_times):.1f} hours ({max(review_times)/24:.1f} days)")
-        print(f"  Shortest: {min(review_times):.1f} hours")
-
-    if commits_list:
-        avg_commits = sum(commits_list) / len(commits_list)
-        print(f"\nCommits:")
-        print(f"  Average commits per PR: {avg_commits:.1f}")
-        print(f"  Median commits per PR: {sorted(commits_list)[len(commits_list)//2]}")
-        print(f"  Most commits in a PR: {max(commits_list)}")
-
-    if comments_list:
-        avg_comments = sum(comments_list) / len(comments_list)
-        print(f"\nComments:")
-        print(f"  Average comments per PR: {avg_comments:.1f}")
-        print(f"  Median comments per PR: {sorted(comments_list)[len(comments_list)//2]}")
-        print(f"  Most comments on a PR: {max(comments_list)}")
-
-    if reviewers_list:
-        avg_reviewers = sum(reviewers_list) / len(reviewers_list)
-        print(f"\nReviewers:")
-        print(f"  Average reviewers per PR: {avg_reviewers:.1f}")
-        print(f"  Median reviewers per PR: {sorted(reviewers_list)[len(reviewers_list)//2]}")
-        print(f"  Most reviewers on a PR: {max(reviewers_list)}")
-
-    print(f"\nSummary written to {markdown_file}")
-
+        # Get merged pull requests
+        print(f"Fetching merged pull requests...")
+        url = f"repositories/{BITBUCKET_WORKSPACE}/{BITBUCKET_REPO}/pullrequests"
+        prs = cloud._get_paged(url, params={'state': 'MERGED'})
+        
+        # Filter PRs based on criteria
+        filtered_prs = []
+        cutoff_date = None
+        
+        if args.days:
+            cutoff_date = datetime.now(tz=datetime.now().astimezone().tzinfo) - timedelta(days=args.days)
+            print(f"Filtering PRs merged after {cutoff_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        for pr in prs:
+            if args.limit and len(filtered_prs) >= args.limit:
+                break
+            
+            if args.days:
+                updated = datetime.fromisoformat(pr['updated_on'].replace('Z', '+00:00'))
+                if updated < cutoff_date:
+                    continue
+            
+            filtered_prs.append(pr)
+    
+    print(f"Found {len(filtered_prs)} PR(s) to analyze")
+    
+    # Collect metrics for each PR
+    all_metrics = []
+    for i, pr in enumerate(filtered_prs, 1):
+        print(f"Analyzing PR {i}/{len(filtered_prs)}: #{pr['id']} - {pr['title'][:50]}...")
+        try:
+            metrics = get_pr_metrics(cloud, BITBUCKET_WORKSPACE, BITBUCKET_REPO, pr)
+            all_metrics.append(metrics)
+        except Exception as e:
+            print(f"  Error analyzing PR #{pr['id']}: {e}")
+            continue
+    
+    # Print summary statistics
+    print_summary_stats(all_metrics, args.report)
+    
+    # Write to CSV
+    if all_metrics:
+        print(f"\nWriting results to {args.output}...")
+        with open(args.output, 'w', newline='') as csvfile:
+            fieldnames = [
+                'id', 'title', 'author', 'state', 'created_on', 'updated_on',
+                'review_time_hours', 'review_time_days', 'reviewer_count',
+                'commits_count', 'comments_count', 'lines_added', 'lines_removed',
+                'total_lines_changed', 'source_branch', 'destination_branch'
+            ]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(all_metrics)
+        
+        print(f"Analysis complete! Results saved to {args.output}")
+    else:
+        print("No metrics collected.")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Analyze Bitbucket pull request sizes')
-    parser.add_argument('--state', default='MERGED',
-                        choices=['MERGED', 'OPEN', 'DECLINED', 'SUPERSEDED'],
-                        help='PR state to analyze (default: MERGED)')
-    parser.add_argument('--limit', type=int, default=100,
-                        help='Maximum number of PRs to analyze (default: 100)')
-    parser.add_argument('--output', default='pr_analysis.csv',
-                        help='Output CSV filename (default: pr_analysis.csv)')
-
-    args = parser.parse_args()
-
-    # Analyze PRs
-    print(f"\nAnalyzing {args.state} pull requests in {BITBUCKET_WORKSPACE}/{BITBUCKET_REPO}...")
-    pr_data = analyze_pull_requests(
-        BITBUCKET_WORKSPACE,
-        BITBUCKET_REPO,
-        state=args.state,
-        limit=args.limit
-    )
-
-    # Print summary
-    print_summary(pr_data)
-
-    # Export to CSV
-    export_to_csv(pr_data, args.output)
+    main()
