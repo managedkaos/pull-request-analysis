@@ -91,15 +91,17 @@ def get_pr_metrics(cloud, workspace, repo, pr):
     comments = list(cloud._get_paged(comments_url))
     comments_count = len(comments)
 
-    # Get code changes (lines added/removed)
+    # Get code changes (lines added/removed and files changed)
     diffstat_url = f"repositories/{workspace}/{repo}/pullrequests/{pr_id}/diffstat"
     try:
         diffstats = list(cloud._get_paged(diffstat_url))
         lines_added = sum(d.get("lines_added", 0) for d in diffstats)
         lines_removed = sum(d.get("lines_removed", 0) for d in diffstats)
+        files_changed = len(diffstats)
     except Exception:
         lines_added = 0
         lines_removed = 0
+        files_changed = 0
 
     return {
         "id": pr_id,
@@ -116,6 +118,7 @@ def get_pr_metrics(cloud, workspace, repo, pr):
         "lines_added": lines_added,
         "lines_removed": lines_removed,
         "total_lines_changed": lines_added + lines_removed,
+        "files_changed": files_changed,
         "source_branch": pr["source"]["branch"]["name"],
         "destination_branch": pr["destination"]["branch"]["name"],
     }
@@ -189,6 +192,7 @@ def print_summary_stats(metrics_list, output_file="pull_request_analysis.md"):
     lines_added = [m["lines_added"] for m in metrics_list]
     lines_removed = [m["lines_removed"] for m in metrics_list]
     total_lines = [m["total_lines_changed"] for m in metrics_list]
+    files_changed = [m["files_changed"] for m in metrics_list]
 
     add_line("\nLines Added per PR:")
     add_line(f"  Average: {statistics.mean(lines_added):.2f}")
@@ -204,6 +208,13 @@ def print_summary_stats(metrics_list, output_file="pull_request_analysis.md"):
     add_line(f"  Average: {statistics.mean(total_lines):.2f}")
     add_line(f"  Median:  {statistics.median(total_lines):.0f}")
     add_line(f"  Total:   {sum(total_lines)}")
+
+    add_line("\nFiles Changed per PR:")
+    add_line(f"  Average: {statistics.mean(files_changed):.2f}")
+    add_line(f"  Median:  {statistics.median(files_changed):.0f}")
+    add_line(f"  Min:     {min(files_changed)}")
+    add_line(f"  Max:     {max(files_changed)}")
+    add_line(f"  Total:   {sum(files_changed)}")
 
     add_line("\n" + "=" * 80)
 
@@ -276,6 +287,15 @@ def print_summary_stats(metrics_list, output_file="pull_request_analysis.md"):
         f.write(f"| Average | {statistics.mean(total_lines):.2f} |\n")
         f.write(f"| Median | {statistics.median(total_lines):.0f} |\n")
         f.write(f"| Total | {sum(total_lines):,} |\n\n")
+
+        f.write("### Files Changed per PR\n\n")
+        f.write("| Metric | Value |\n")
+        f.write("|--------|-------|\n")
+        f.write(f"| Average | {statistics.mean(files_changed):.2f} |\n")
+        f.write(f"| Median | {statistics.median(files_changed):.0f} |\n")
+        f.write(f"| Min | {min(files_changed)} |\n")
+        f.write(f"| Max | {max(files_changed)} |\n")
+        f.write(f"| Total | {sum(files_changed):,} |\n\n")
 
     print(f"\nMarkdown report saved to {output_file}")
 
@@ -392,6 +412,7 @@ def main():
                     "lines_added",
                     "lines_removed",
                     "total_lines_changed",
+                    "files_changed",
                     "source_branch",
                     "destination_branch",
                 ]

@@ -9,7 +9,7 @@ The tool retrieves pull request data from Bitbucket Cloud, calculates various me
 This tool connects to Bitbucket Cloud via API to analyze pull requests in a repository. It provides insights into:
 
 - Review time analysis (creation to merge)
-- Code change metrics (lines added/removed)
+- Code change metrics (lines added/removed, files changed)
 - Collaboration patterns (reviewers, comments, commits)
 - Development velocity trends
 
@@ -91,7 +91,7 @@ The script provides detailed console output including:
    - Commits per PR statistics
    - Comments per PR statistics
    - Reviewers per PR statistics
-   - Code changes statistics (lines added/removed)
+   - Code changes statistics (lines added/removed, files changed)
 
 ### CSV Report
 
@@ -113,6 +113,7 @@ The script generates a CSV file with detailed data for each PR:
 | `lines_added` | Lines of code added |
 | `lines_removed` | Lines of code removed |
 | `total_lines_changed` | Total lines changed |
+| `files_changed` | Number of files modified |
 | `source_branch` | Source branch name |
 | `destination_branch` | Destination branch name |
 
@@ -125,7 +126,7 @@ The script generates a comprehensive Markdown report with:
 - **Commits per PR**: Analysis of commit patterns
 - **Comments per PR**: Analysis of discussion activity
 - **Reviewers per PR**: Analysis of review participation
-- **Code Changes**: Detailed analysis of code modifications
+- **Code Changes**: Detailed analysis of code modifications and files changed
 
 ### Sample Output
 
@@ -181,6 +182,13 @@ Total Lines Changed per PR:
   Median:  36
   Total:   1450
 
+Files Changed per PR:
+  Average: 3.2
+  Median:  2
+  Min:     1
+  Max:     12
+  Total:   80
+
 Writing results to pull_request_data.csv...
 Analysis complete! Results saved to pull_request_data.csv
 
@@ -219,7 +227,7 @@ Markdown report saved to pull_request_analysis.md
 ## Features
 
 - **Flexible Filtering**: Filter by date range, limit results, or analyze specific PRs
-- **Comprehensive Metrics**: Detailed analysis of review times, code changes, and collaboration
+- **Comprehensive Metrics**: Detailed analysis of review times, code changes, file modifications, and collaboration
 - **Multiple Output Formats**: Both CSV data and Markdown reports
 - **Robust Error Handling**: Continues processing even when individual PRs fail
 - **Interrupt-Safe**: Gracefully handles user interruptions while preserving partial results
@@ -229,6 +237,6 @@ Markdown report saved to pull_request_analysis.md
 
 - **Team Performance Analysis**: Understand review velocity and collaboration patterns
 - **Process Improvement**: Identify bottlenecks in the code review process
-- **Code Quality Insights**: Analyze code change patterns and review engagement
+- **Code Quality Insights**: Analyze code change patterns, file modification scope, and review engagement
 - **Historical Analysis**: Track trends over time with date-based filtering
 - **Individual PR Analysis**: Deep dive into specific pull requests
