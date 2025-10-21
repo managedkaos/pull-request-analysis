@@ -2,13 +2,28 @@
 Unit tests
 """
 
+import os
 import sys
 import tempfile
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from main import get_pr_metrics, parse_args, print_summary_stats
+# Mock environment variables before importing main module
+with patch.dict(
+    os.environ,
+    {
+        "BITBUCKET_USERNAME": "test_user",
+        "BITBUCKET_API_TOKEN": "test_token",
+        "BITBUCKET_WORKSPACE": "test_workspace",
+        "BITBUCKET_REPO": "test_repo",
+    },
+):
+    # Mock the atlassian import to avoid dependency issues
+    sys.modules["atlassian"] = MagicMock()
+    sys.modules["atlassian.bitbucket"] = MagicMock()
+
+    from main import get_pr_metrics, parse_args, print_summary_stats
 
 
 class TestArgumentParsing(unittest.TestCase):
