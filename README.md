@@ -51,6 +51,7 @@ This will analyze the last 50 merged pull requests and generate reports in the c
 | `--days N` | Analyze PRs from the last N days | All available PRs |
 | `--limit N` | Analyze the last N PRs | 50 |
 | `--pr-id N` | Analyze a specific PR by ID number | All PRs |
+| `--openprs` | Analyze only PRs in OPEN state (default: analyze MERGED PRs) | False |
 | `--output FILENAME` | Specify CSV output filename | `pull_request_data.csv` |
 | `--report FILENAME` | Specify Markdown report filename | `pull_request_analysis.md` |
 
@@ -74,6 +75,18 @@ python main.py --days 7 --limit 20
 
 # Analyze specific PR with custom report name
 python main.py --pr-id 456 --report pr_456_analysis.md
+
+# Analyze only open PRs
+python main.py --openprs
+
+# Analyze open PRs from the last 7 days
+python main.py --openprs --days 7
+
+# Analyze the last 20 open PRs
+python main.py --openprs --limit 20
+
+# Analyze open PRs with custom output files
+python main.py --openprs --output open_prs.csv --report open_prs_report.md
 ```
 
 ## Output
@@ -105,8 +118,7 @@ The script generates a CSV file with detailed data for each PR:
 | `state` | PR state (MERGED, OPEN, etc.) |
 | `created_on` | Creation timestamp |
 | `updated_on` | Last update timestamp |
-| `review_time_hours` | Time from creation to merge (hours) |
-| `review_time_days` | Time from creation to merge (days) |
+| `review_time_days` | Time from creation to merge (fractional days) |
 | `reviewer_count` | Number of reviewers |
 | `commits_count` | Number of commits |
 | `comments_count` | Number of comments |
@@ -143,11 +155,11 @@ PULL REQUEST ANALYSIS SUMMARY
 
 Total PRs analyzed: 25
 
-Review Time (hours):
-  Average: 18.5 hours (0.77 days)
-  Median:  12.0 hours (0.50 days)
-  Min:     2.0 hours (0.08 days)
-  Max:     72.0 hours (3.00 days)
+Review Time (days):
+  Average: 0.77 days (18.5 hours)
+  Median:  0.50 days (12.0 hours)
+  Min:     0.08 days (2.0 hours)
+  Max:     3.00 days (72.0 hours)
 
 Commits per PR:
   Average: 3.2
@@ -227,6 +239,7 @@ Markdown report saved to pull_request_analysis.md
 ## Features
 
 - **Flexible Filtering**: Filter by date range, limit results, or analyze specific PRs
+- **PR State Analysis**: Analyze merged PRs (default) or open PRs using the `--openprs` flag
 - **Comprehensive Metrics**: Detailed analysis of review times, code changes, file modifications, and collaboration
 - **Multiple Output Formats**: Both CSV data and Markdown reports
 - **Robust Error Handling**: Continues processing even when individual PRs fail
@@ -240,3 +253,4 @@ Markdown report saved to pull_request_analysis.md
 - **Code Quality Insights**: Analyze code change patterns, file modification scope, and review engagement
 - **Historical Analysis**: Track trends over time with date-based filtering
 - **Individual PR Analysis**: Deep dive into specific pull requests
+- **Open PR Monitoring**: Track currently open PRs and their age to identify stale reviews

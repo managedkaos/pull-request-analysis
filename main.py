@@ -53,6 +53,11 @@ def parse_args():
         default="pull_request_analysis.md",
         help="Output markdown report file name",
     )
+    parser.add_argument(
+        "--openprs",
+        action="store_true",
+        help="Analyze only PRs in OPEN state (default: analyze MERGED PRs)",
+    )
     return parser.parse_args()
 
 
@@ -60,14 +65,16 @@ def get_pr_metrics(cloud, workspace, repo, pr):
     """Get detailed metrics for a single PR"""
     pr_id = pr["id"]
 
-    # Calculate review time
+    # Calculate review time in fractional days
     created = datetime.fromisoformat(pr["created_on"].replace("Z", "+00:00"))
     if pr["state"] == "MERGED" and pr.get("updated_on"):
         merged = datetime.fromisoformat(pr["updated_on"].replace("Z", "+00:00"))
-        review_time_hours = (merged - created).total_seconds() / 3600
-        review_time_days = review_time_hours / 24
+        review_time_days = (merged - created).total_seconds() / (24 * 3600)
+    elif pr["state"] == "OPEN":
+        # For open PRs, calculate time since creation
+        now = datetime.now(tz=created.tzinfo)
+        review_time_days = (now - created).total_seconds() / (24 * 3600)
     else:
-        review_time_hours = None
         review_time_days = None
 
     # Get reviewers count
@@ -110,7 +117,6 @@ def get_pr_metrics(cloud, workspace, repo, pr):
         "state": pr["state"],
         "created_on": pr["created_on"],
         "updated_on": pr.get("updated_on", ""),
-        "review_time_hours": review_time_hours,
         "review_time_days": review_time_days,
         "reviewer_count": reviewer_count,
         "commits_count": commits_count,
@@ -143,25 +149,27 @@ def print_summary_stats(metrics_list, output_file="pull_request_analysis.md"):
 
     add_line(f"\nTotal PRs analyzed: {len(metrics_list)}")
 
-    # Review time statistics
+    # Review time statistics (or time since creation for open PRs)
     review_times = [
-        m["review_time_hours"]
-        for m in metrics_list
-        if m["review_time_hours"] is not None
+        m["review_time_days"] for m in metrics_list if m["review_time_days"] is not None
     ]
     if review_times:
-        add_line("\nReview Time (hours):")
+        # Check if we're analyzing open PRs by looking at the state
+        is_open_analysis = any(m["state"] == "OPEN" for m in metrics_list)
+        time_label = "Time Since Creation" if is_open_analysis else "Review Time"
+
+        add_line(f"\n{time_label} (days):")
         add_line(
-            f"  Average: {statistics.mean(review_times):.2f} hours ({statistics.mean(review_times) / 24:.2f} days)"
+            f"  Average: {statistics.mean(review_times):.2f} days ({statistics.mean(review_times) * 24:.2f} hours)"
         )
         add_line(
-            f"  Median:  {statistics.median(review_times):.2f} hours ({statistics.median(review_times) / 24:.2f} days)"
+            f"  Median:  {statistics.median(review_times):.2f} days ({statistics.median(review_times) * 24:.2f} hours)"
         )
         add_line(
-            f"  Min:     {min(review_times):.2f} hours ({min(review_times) / 24:.2f} days)"
+            f"  Min:     {min(review_times):.2f} days ({min(review_times) * 24:.2f} hours)"
         )
         add_line(
-            f"  Max:     {max(review_times):.2f} hours ({max(review_times) / 24:.2f} days)"
+            f"  Max:     {max(review_times):.2f} days ({max(review_times) * 24:.2f} hours)"
         )
 
     # Commits statistics
@@ -226,20 +234,24 @@ def print_summary_stats(metrics_list, output_file="pull_request_analysis.md"):
         f.write(f"**Total PRs analyzed:** {len(metrics_list)}\n\n")
 
         if review_times:
-            f.write("## Review Time\n\n")
-            f.write("| Metric | Hours | Days |\n")
-            f.write("|--------|-------|------|\n")
+            # Check if we're analyzing open PRs by looking at the state
+            is_open_analysis = any(m["state"] == "OPEN" for m in metrics_list)
+            time_label = "Time Since Creation" if is_open_analysis else "Review Time"
+
+            f.write(f"## {time_label}\n\n")
+            f.write("| Metric | Days | Hours |\n")
+            f.write("|--------|------|-------|\n")
             f.write(
-                f"| Average | {statistics.mean(review_times):.2f} | {statistics.mean(review_times) / 24:.2f} |\n"
+                f"| Average | {statistics.mean(review_times):.2f} | {statistics.mean(review_times) * 24:.2f} |\n"
             )
             f.write(
-                f"| Median | {statistics.median(review_times):.2f} | {statistics.median(review_times) / 24:.2f} |\n"
+                f"| Median | {statistics.median(review_times):.2f} | {statistics.median(review_times) * 24:.2f} |\n"
             )
             f.write(
-                f"| Min | {min(review_times):.2f} | {min(review_times) / 24:.2f} |\n"
+                f"| Min | {min(review_times):.2f} | {min(review_times) * 24:.2f} |\n"
             )
             f.write(
-                f"| Max | {max(review_times):.2f} | {max(review_times) / 24:.2f} |\n\n"
+                f"| Max | {max(review_times):.2f} | {max(review_times) * 24:.2f} |\n\n"
             )
 
         f.write("## Commits per PR\n\n")
@@ -322,11 +334,17 @@ def main():
             print(f"Error fetching PR #{args.pr_id}: {e}")
             return
     else:
-        # Get merged pull requests
-        print("Fetching merged pull requests...")
+        # Get pull requests based on state
+        if args.openprs:
+            print("Fetching open pull requests...")
+            state = "OPEN"
+        else:
+            print("Fetching merged pull requests...")
+            state = "MERGED"
+
         url = f"repositories/{BITBUCKET_WORKSPACE}/{BITBUCKET_REPO}/pullrequests"
         try:
-            prs = cloud._get_paged(url, params={"state": "MERGED"})
+            prs = cloud._get_paged(url, params={"state": state})
         except KeyboardInterrupt:
             print("\n\nOperation cancelled by user during PR fetching.")
             return
@@ -342,9 +360,14 @@ def main():
             cutoff_date = datetime.now(
                 tz=datetime.now().astimezone().tzinfo
             ) - timedelta(days=args.days)
-            print(
-                f"Filtering PRs merged after {cutoff_date.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
+            if args.openprs:
+                print(
+                    f"Filtering PRs created after {cutoff_date.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+            else:
+                print(
+                    f"Filtering PRs merged after {cutoff_date.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
 
         try:
             for pr in prs:
@@ -352,10 +375,17 @@ def main():
                     break
 
                 if args.days:
-                    updated = datetime.fromisoformat(
-                        pr["updated_on"].replace("Z", "+00:00")
-                    )
-                    if updated < cutoff_date:
+                    if args.openprs:
+                        # For open PRs, use created_on date
+                        date_field = datetime.fromisoformat(
+                            pr["created_on"].replace("Z", "+00:00")
+                        )
+                    else:
+                        # For merged PRs, use updated_on date
+                        date_field = datetime.fromisoformat(
+                            pr["updated_on"].replace("Z", "+00:00")
+                        )
+                    if date_field < cutoff_date:
                         continue
 
                 filtered_prs.append(pr)
@@ -404,7 +434,6 @@ def main():
                     "state",
                     "created_on",
                     "updated_on",
-                    "review_time_hours",
                     "review_time_days",
                     "reviewer_count",
                     "commits_count",
