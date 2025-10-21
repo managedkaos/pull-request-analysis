@@ -18,7 +18,7 @@ help:
 	@echo "  build                    - build docker container"
 	@echo "  clean                    - clean up workspace and containers"
 
-all: requirements lint test build
+all: requirements lint test pre-commit-run build
 
 requirements:
 	pip install --quiet --upgrade --requirement requirements.txt
